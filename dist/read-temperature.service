@@ -5,7 +5,7 @@ Requires=influxdb.service
 
 [Service]
 User=grayshade
-ExecStart=/home/grayshade/read-temperature-tokio/target/debug/read-temperature-tokio
+ExecStart=/home/grayshade/read-temperature-tokio/target/release/read-temperature-tokio
 
 [Install]
 WantedBy=default.target

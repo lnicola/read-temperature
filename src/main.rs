@@ -1,24 +1,29 @@
 #![feature(alloc_system)]
 
+extern crate bytes;
 extern crate futures;
 extern crate tokio_core;
+extern crate tokio_io;
 extern crate tokio_service;
 extern crate tokio_timer;
 extern crate tokio_serial;
 extern crate hyper;
 extern crate alloc_system;
 
+use bytes::{BufMut, BytesMut};
 use std::{io, env, str};
 use std::path::PathBuf;
 use std::time::{self, Instant, Duration, SystemTime};
 use std::sync::Arc;
-use futures::{Future, BoxFuture, Stream, Sink};
-use tokio_core::io::{Io, Codec, EasyBuf};
+use std::str::FromStr;
+use futures::{Future, Stream, Sink};
 use tokio_core::reactor::{Core, Handle};
+use tokio_io::AsyncRead;
+use tokio_io::codec::{Decoder, Encoder};
 use tokio_service::Service;
 use tokio_timer::Timer;
 use tokio_serial::{Serial, SerialPortSettings};
-use hyper::{Client, Method, Url};
+use hyper::{Client, Method, Uri};
 use hyper::client::Request;
 use hyper::header::{Connection, ContentLength, ContentType};
 
@@ -33,14 +38,14 @@ struct SensorReading {
 
 struct SensorCodec;
 
-impl Codec for SensorCodec {
-    type In = SensorReading;
-    type Out = SensorCommand;
+impl Decoder for SensorCodec {
+    type Item = SensorReading;
+    type Error = std::io::Error;
 
-    fn decode(&mut self, buf: &mut EasyBuf) -> io::Result<Option<Self::In>> {
-        let newline = buf.as_ref().iter().position(|b| *b == b'\n');
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let newline = src.as_ref().iter().position(|b| *b == b'\n');
         if let Some(n) = newline {
-            let line = buf.drain_to(n + 1);
+            let line = src.split_to(n + 1);
             let r = str::from_utf8(line.as_ref())
                 .ok()
                 .and_then(|s| {
@@ -65,10 +70,18 @@ impl Codec for SensorCodec {
         }
         Ok(None)
     }
+}
 
-    fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
-        match msg {
-            SensorCommand::Measure => buf.push(b'M'),
+impl Encoder for SensorCodec {
+    type Item = SensorCommand;
+    type Error = std::io::Error;
+
+    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        match item {
+            SensorCommand::Measure => {
+                dst.reserve(1);
+                dst.put(b'M')
+            }
         }
         Ok(())
     }
@@ -85,19 +98,19 @@ impl Service for Sensor {
     type Response = SensorReading;
     type Error = io::Error;
 
-    type Future = BoxFuture<Self::Response, Self::Error>;
+    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
         let port = Serial::from_path(&self.path, &self.serial_settings, &self.handle).unwrap();
         let transport = port.framed(SensorCodec);
 
-        transport.send(req)
+        Box::new(transport.send(req)
             .and_then(|transport| transport.into_future().map_err(|(e, _)| e))
             .and_then(|(reading, _)| match reading {
                 Some(r) => Ok(r),
                 _ => Err(io::Error::new(io::ErrorKind::Other, "Read failed")),
             })
-            .boxed()
+            )
     }
 }
 
@@ -109,12 +122,12 @@ struct InfluxData {
 
 struct Influx {
     handle: Handle,
-    url: Url,
+    url: Uri,
 }
 
 impl Service for Influx {
     type Request = InfluxData;
-    type Response = ();
+    type Response = hyper::Response;
     type Error = hyper::Error;
 
     type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
@@ -136,15 +149,14 @@ impl Service for Influx {
         }
         request.set_body(msg);
 
-        Box::new(client.request(request).and_then(|_| Ok(())))
+        Box::new(client.request(request))
     }
 }
 
 fn main() {
     let mut args = env::args();
     let tty_path = args.nth(1).unwrap_or_else(|| String::from("/dev/ttyACM0"));
-    let mut influx_url = hyper::Url::parse("http://127.0.0.1:8086").unwrap().join("write").unwrap();
-    influx_url.query_pairs_mut().append_pair("db", "temperature").append_pair("precision", "s");
+    let influx_url = Uri::from_str("http://127.0.0.1:8086/write?db=temperature&precision=s").unwrap();
     println!("{}", influx_url);
 
     let mut core = Core::new().unwrap();
@@ -164,17 +176,16 @@ fn main() {
     let timer = Timer::default();
     let wakeups = timer.interval_at(Instant::now(), Duration::from_secs(10));
     let reads = wakeups.for_each(|_| {
-        let influx = influx.clone();
+        let influx = Arc::clone(&influx);
         let handle2 = handle.clone();
         let reading = sensor.call(SensorCommand::Measure)
             .and_then(move |r| {
-
                 let data = InfluxData {
                     temperature: r.temperature,
                     humidity: r.humidity,
                     timestamp: SystemTime::now(),
                 };
-                let sender = influx.call(data).map_err(|_| ());
+                let sender = influx.call(data).map(|_| ()).map_err(|_| ());
                 handle2.spawn(sender);
                 Ok(())
             })
