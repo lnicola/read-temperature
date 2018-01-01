@@ -1,0 +1,11 @@
+[Unit]
+Description=Monitors Room Temperature
+After=influxdb.service
+Requires=influxdb.service
+
+[Service]
+User=grayshade
+ExecStart=/home/grayshade/read-temperature-tokio/target/debug/read-temperature-tokio
+
+[Install]
+WantedBy=default.target

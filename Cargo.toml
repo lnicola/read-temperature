@@ -1,0 +1,12 @@
+[package]
+name = "read-temperature-tokio"
+version = "0.1.0"
+authors = ["Laurentiu Nicola <lnicola@dend.ro>"]
+
+[dependencies]
+tokio-serial = "0.1"
+futures = "0.1"
+tokio-core = "0.1"
+tokio-service = "0.1"
+tokio-timer = "0.1"
+hyper = { git = "https://github.com/hyperium/hyper" }
