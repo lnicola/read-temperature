@@ -16,12 +16,12 @@ use alloc_system::System;
 use bytes::{BufMut, BytesMut};
 use futures::{future, Future, Sink, Stream};
 use hyper::client::Request;
-use hyper::header::{Connection, ContentLength, ContentType};
+use hyper::header::{ContentLength, ContentType};
 use hyper::{Client, Method, Uri};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{self, Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 use std::{env, io, str};
 use tokio_core::reactor::{Core, Handle};
 use tokio_io::AsyncRead;
@@ -134,15 +134,14 @@ impl Service for Sensor {
 struct InfluxData {
     temperature: f32,
     humidity: f32,
-    timestamp: SystemTime,
 }
 
-struct Influx {
-    handle: Handle,
+struct Influx<C: hyper::client::Connect> {
     url: Uri,
+    client: Client<C>,
 }
 
-impl Service for Influx {
+impl<C: hyper::client::Connect> Service for Influx<C> {
     type Request = InfluxData;
     type Response = hyper::Response;
     type Error = Error;
@@ -150,25 +149,16 @@ impl Service for Influx {
     type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
-        let timestamp = req.timestamp
-            .duration_since(time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
         let msg = format!(
-            "temperature,host=ubik value={} {}\nhumidity,host=ubik value={} {}\n",
-            req.temperature, timestamp, req.humidity, timestamp
+            "temperature,host=ubik value={}\nhumidity,host=ubik value={}\n",
+            req.temperature, req.humidity
         );
-        let client = Client::new(&self.handle);
         let mut request = Request::new(Method::Post, self.url.clone());
-        {
-            let headers = request.headers_mut();
-            headers.set(ContentLength(msg.len() as u64));
-            headers.set(Connection::close());
-            headers.set(ContentType::form_url_encoded());
-        }
+        request.headers_mut().set(ContentLength(msg.len() as u64));
+        request.headers_mut().set(ContentType::form_url_encoded());
         request.set_body(msg);
 
-        Box::new(client.request(request).map_err(Error::Hyper))
+        Box::new(self.client.request(request).map_err(Error::Hyper))
     }
 }
 
@@ -188,8 +178,8 @@ fn main() {
     };
 
     let influx = Arc::new(Influx {
-        handle: handle.clone(),
         url: influx_url,
+        client: Client::new(&handle),
     });
 
     let timer = Timer::default();
@@ -200,7 +190,6 @@ fn main() {
             let data = InfluxData {
                 temperature: r.temperature,
                 humidity: r.humidity,
-                timestamp: SystemTime::now(),
             };
             influx.call(data).map(|r| {
                 if !r.status().is_success() {
