@@ -1,7 +1,5 @@
 [Unit]
 Description=Monitors Room Temperature
-After=influxdb.service
-Requires=influxdb.service
 
 [Service]
 User=grayshade
