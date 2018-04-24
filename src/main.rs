@@ -5,6 +5,7 @@ extern crate bytes;
 #[macro_use]
 extern crate failure;
 extern crate futures;
+extern crate http;
 extern crate hyper;
 extern crate tokio_core;
 extern crate tokio_io;
@@ -15,17 +16,15 @@ extern crate tokio_timer;
 use alloc_system::System;
 use bytes::{BufMut, BytesMut};
 use futures::{future, Future, Sink, Stream};
-use hyper::client::Request;
-use hyper::header::{ContentLength, ContentType};
-use hyper::{Client, Method, Uri};
+use hyper::{Body, Client, Request, Uri};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{env, io, str};
 use tokio_core::reactor::{Core, Handle};
-use tokio_io::AsyncRead;
 use tokio_io::codec::{Decoder, Encoder};
+use tokio_io::AsyncRead;
 use tokio_serial::{Serial, SerialPortSettings};
 use tokio_service::Service;
 use tokio_timer::{TimeoutError, Timer, TimerError};
@@ -141,9 +140,9 @@ struct Influx<C: hyper::client::Connect> {
     client: Client<C>,
 }
 
-impl<C: hyper::client::Connect> Service for Influx<C> {
+impl<C: hyper::client::Connect + 'static> Service for Influx<C> {
     type Request = InfluxData;
-    type Response = hyper::Response;
+    type Response = hyper::Response<Body>;
     type Error = Error;
 
     type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
@@ -153,10 +152,14 @@ impl<C: hyper::client::Connect> Service for Influx<C> {
             "temperature,host=ubik value={}\nhumidity,host=ubik value={}\n",
             req.temperature, req.humidity
         );
-        let mut request = Request::new(Method::Post, self.url.clone());
-        request.headers_mut().set(ContentLength(msg.len() as u64));
-        request.headers_mut().set(ContentType::form_url_encoded());
-        request.set_body(msg);
+        let request = Request::post(&self.url)
+            .header(
+                "Content-Length",
+                http::header::HeaderValue::from_str(&msg.len().to_string()).unwrap(),
+            )
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(hyper::Body::from(msg))
+            .unwrap();
 
         Box::new(self.client.request(request).map_err(Error::Hyper))
     }
@@ -179,7 +182,7 @@ fn main() {
 
     let influx = Arc::new(Influx {
         url: influx_url,
-        client: Client::new(&handle),
+        client: Client::new(),
     });
 
     let timer = Timer::default();
