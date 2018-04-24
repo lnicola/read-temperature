@@ -11,6 +11,6 @@ hyper = { git = "https://github.com/hyperium/hyper" }
 tokio-io = "0.1"
 tokio-serial = { git = "https://github.com/lnicola/tokio-serial", branch = "tokio" }
 tokio-service = "0.1"
-tokio-timer-plus = "0.1"
+tokio-timer = "0.2"
 tokio = "0.1.5"
 http = "0.1.5"

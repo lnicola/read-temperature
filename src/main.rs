@@ -27,7 +27,7 @@ use tokio_io::codec::{Decoder, Encoder};
 use tokio_io::AsyncRead;
 use tokio_serial::{Serial, SerialPortSettings};
 use tokio_service::Service;
-use tokio_timer::{TimeoutError, Timer, TimerError};
+use tokio_timer::{Deadline, Interval};
 
 #[global_allocator]
 static A: System = System;
@@ -100,7 +100,7 @@ enum Error {
     #[fail(display = "an HTTP error has occurred: {}", _0)]
     Hyper(hyper::Error),
     #[fail(display = "an timer error has occurred: {}", _0)]
-    Timer(TimerError),
+    Timer(tokio_timer::Error),
     #[fail(display = "an operation has timed out")]
     Timeout,
 }
@@ -180,8 +180,7 @@ fn main() {
         client: Client::new(),
     });
 
-    let timer = Timer::default();
-    let wakeups = timer.interval_at(Instant::now(), Duration::from_secs(10));
+    let wakeups = Interval::new(Instant::now(), Duration::from_secs(10));
     let reads = wakeups
         .for_each(move |_| {
             let influx = Arc::clone(&influx);
@@ -196,12 +195,17 @@ fn main() {
                     }
                 })
             });
-            let reading = timer
-                .timeout(reading, Duration::from_secs(6))
-                .map_err(|e| match e {
-                    TimeoutError::Timer(_, e) => Error::Timer(e),
-                    TimeoutError::TimedOut(_) => Error::Timeout,
-                    TimeoutError::Inner(e) => e,
+            let reading = Deadline::new(reading, Instant::now() + Duration::from_secs(6))
+                .map_err(|e| {
+                    if e.is_timer() {
+                        Error::Timer(e.into_timer().unwrap())
+                    } else if e.is_inner() {
+                        e.into_inner().unwrap()
+                    } else if e.is_elapsed() {
+                        Error::Timeout
+                    } else {
+                        unreachable!()
+                    }
                 })
                 .map_err(|e| eprintln!("{}", e));
 
