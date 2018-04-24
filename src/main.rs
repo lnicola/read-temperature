@@ -24,7 +24,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{env, io, str};
-use tokio_core::reactor::{Core, Handle};
+use tokio_core::reactor::Core;
 use tokio_io::codec::{Decoder, Encoder};
 use tokio_io::AsyncRead;
 use tokio_serial::{Serial, SerialPortSettings};
@@ -91,7 +91,6 @@ impl Encoder for SensorCodec {
 }
 
 struct Sensor {
-    handle: Handle,
     path: PathBuf,
     serial_settings: SerialPortSettings,
 }
@@ -116,7 +115,7 @@ impl Service for Sensor {
     type Future = Box<Future<Item = Self::Response, Error = Self::Error> + Send>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
-        let serial = Serial::from_path(&self.path, &self.serial_settings, &self.handle);
+        let serial = Serial::from_path(&self.path, &self.serial_settings);
 
         Box::new(
             future::result(serial)
@@ -174,10 +173,8 @@ fn main() {
         Uri::from_str("http://127.0.0.1:8086/write?db=temperature&precision=s").unwrap();
 
     let mut core = Core::new().unwrap();
-    let handle = core.handle();
 
     let sensor = Sensor {
-        handle: handle.clone(),
         path: PathBuf::from(&tty_path),
         serial_settings: SerialPortSettings::default(),
     };
