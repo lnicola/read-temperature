@@ -7,6 +7,7 @@ extern crate failure;
 extern crate futures;
 extern crate http;
 extern crate hyper;
+extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_serial;
@@ -16,7 +17,8 @@ extern crate tokio_timer;
 use alloc_system::System;
 use bytes::{BufMut, BytesMut};
 use futures::{future, Future, Sink, Stream};
-use hyper::{Body, Client, Request, Uri};
+use hyper::client::Connect;
+use hyper::{Body, Client, Request, Response, Uri};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -111,7 +113,7 @@ impl Service for Sensor {
     type Response = SensorReading;
     type Error = Error;
 
-    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
+    type Future = Box<Future<Item = Self::Response, Error = Self::Error> + Send>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
         let serial = Serial::from_path(&self.path, &self.serial_settings, &self.handle);
@@ -135,17 +137,17 @@ struct InfluxData {
     humidity: f32,
 }
 
-struct Influx<C: hyper::client::Connect> {
+struct Influx<C: Connect> {
     url: Uri,
     client: Client<C>,
 }
 
-impl<C: hyper::client::Connect + 'static> Service for Influx<C> {
+impl<C: Connect + 'static> Service for Influx<C> {
     type Request = InfluxData;
-    type Response = hyper::Response<Body>;
+    type Response = Response<Body>;
     type Error = Error;
 
-    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
+    type Future = Box<Future<Item = Self::Response, Error = Self::Error> + Send>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
         let msg = format!(
@@ -158,7 +160,7 @@ impl<C: hyper::client::Connect + 'static> Service for Influx<C> {
                 http::header::HeaderValue::from_str(&msg.len().to_string()).unwrap(),
             )
             .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(hyper::Body::from(msg))
+            .body(Body::from(msg))
             .unwrap();
 
         Box::new(self.client.request(request).map_err(Error::Hyper))
@@ -209,7 +211,7 @@ fn main() {
             })
             .map_err(|e| eprintln!("{}", e));
 
-        handle.spawn(reading);
+        tokio::spawn(reading);
         Ok(())
     });
 
