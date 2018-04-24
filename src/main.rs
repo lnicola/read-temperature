@@ -8,7 +8,6 @@ extern crate futures;
 extern crate http;
 extern crate hyper;
 extern crate tokio;
-extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_serial;
 extern crate tokio_service;
@@ -24,7 +23,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{env, io, str};
-use tokio_core::reactor::Core;
 use tokio_io::codec::{Decoder, Encoder};
 use tokio_io::AsyncRead;
 use tokio_serial::{Serial, SerialPortSettings};
@@ -172,8 +170,6 @@ fn main() {
     let influx_url =
         Uri::from_str("http://127.0.0.1:8086/write?db=temperature&precision=s").unwrap();
 
-    let mut core = Core::new().unwrap();
-
     let sensor = Sensor {
         path: PathBuf::from(&tty_path),
         serial_settings: SerialPortSettings::default(),
@@ -186,31 +182,33 @@ fn main() {
 
     let timer = Timer::default();
     let wakeups = timer.interval_at(Instant::now(), Duration::from_secs(10));
-    let reads = wakeups.for_each(|_| {
-        let influx = Arc::clone(&influx);
-        let reading = sensor.call(SensorCommand::Measure).and_then(move |r| {
-            let data = InfluxData {
-                temperature: r.temperature,
-                humidity: r.humidity,
-            };
-            influx.call(data).map(|r| {
-                if !r.status().is_success() {
-                    eprintln!("{:?}", r);
-                }
-            })
-        });
-        let reading = timer
-            .timeout(reading, Duration::from_secs(6))
-            .map_err(|e| match e {
-                TimeoutError::Timer(_, e) => Error::Timer(e),
-                TimeoutError::TimedOut(_) => Error::Timeout,
-                TimeoutError::Inner(e) => e,
-            })
-            .map_err(|e| eprintln!("{}", e));
+    let reads = wakeups
+        .for_each(move |_| {
+            let influx = Arc::clone(&influx);
+            let reading = sensor.call(SensorCommand::Measure).and_then(move |r| {
+                let data = InfluxData {
+                    temperature: r.temperature,
+                    humidity: r.humidity,
+                };
+                influx.call(data).map(|r| {
+                    if !r.status().is_success() {
+                        eprintln!("{:?}", r);
+                    }
+                })
+            });
+            let reading = timer
+                .timeout(reading, Duration::from_secs(6))
+                .map_err(|e| match e {
+                    TimeoutError::Timer(_, e) => Error::Timer(e),
+                    TimeoutError::TimedOut(_) => Error::Timeout,
+                    TimeoutError::Inner(e) => e,
+                })
+                .map_err(|e| eprintln!("{}", e));
 
-        tokio::spawn(reading);
-        Ok(())
-    });
+            tokio::spawn(reading);
+            Ok(())
+        })
+        .map_err(|e| eprintln!("{}", e));
 
-    core.run(reads).unwrap();
+    tokio::run(reads);
 }
