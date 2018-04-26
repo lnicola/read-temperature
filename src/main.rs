@@ -96,11 +96,11 @@ struct Sensor {
 #[derive(Debug, Fail)]
 enum Error {
     #[fail(display = "an IO error has occurred: {}", _0)]
-    Io(io::Error),
+    Io(#[cause] io::Error),
     #[fail(display = "an HTTP error has occurred: {}", _0)]
-    Hyper(hyper::Error),
+    Hyper(#[cause] hyper::Error),
     #[fail(display = "an timer error has occurred: {}", _0)]
-    Timer(tokio_timer::Error),
+    Timer(#[cause] tokio_timer::Error),
     #[fail(display = "an operation has timed out")]
     Timeout,
 }
