@@ -9,8 +9,8 @@ failure = "0.1.1"
 futures = "0.1"
 hyper = { git = "https://github.com/hyperium/hyper" }
 tokio-io = "0.1"
-tokio-serial = { git = "https://github.com/berkowski/tokio-serial" }
+tokio-serial = "0.8"
 tokio-service = "0.1"
 tokio-timer = "0.2"
-tokio = "0.1.5"
+tokio = "0.1"
 http = "0.1.5"

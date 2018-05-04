@@ -16,7 +16,7 @@ extern crate tokio_timer;
 use alloc_system::System;
 use bytes::{BufMut, BytesMut};
 use futures::{future, Future, Sink, Stream};
-use hyper::client::Connect;
+use hyper::client::connect::Connect;
 use hyper::{Body, Client, Request, Response, Uri};
 use std::path::PathBuf;
 use std::str::FromStr;
