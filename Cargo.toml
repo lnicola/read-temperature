@@ -5,12 +5,12 @@ version = "0.1.0"
 
 [dependencies]
 bytes = "0.4"
-failure = "0.1.1"
+failure = "0.1"
 futures = "0.1"
-hyper = { git = "https://github.com/hyperium/hyper" }
+hyper = "0.12"
 tokio-io = "0.1"
 tokio-serial = "0.8"
 tokio-service = "0.1"
 tokio-timer = "0.2"
 tokio = "0.1"
-http = "0.1.5"
+http = "0.1"
