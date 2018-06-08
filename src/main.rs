@@ -16,7 +16,7 @@ use alloc_system::System;
 use bytes::{BufMut, BytesMut};
 use failure::Error;
 use futures::{future, Future, Sink, Stream};
-use http::header::{HeaderValue, CONTENT_LENGTH, CONTENT_TYPE};
+use http::header::CONTENT_TYPE;
 use hyper::client::connect::Connect;
 use hyper::{Body, Client, Request, Response, Uri};
 use std::path::PathBuf;
@@ -140,10 +140,6 @@ impl<C: Connect + 'static> Service for Influx<C> {
             req.temperature, req.humidity
         );
         let request = Request::post(&self.url)
-            .header(
-                CONTENT_LENGTH,
-                HeaderValue::from_str(&msg.len().to_string()).unwrap(),
-            )
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(Body::from(msg))
             .unwrap();
