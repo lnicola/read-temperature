@@ -2,7 +2,6 @@
 
 extern crate alloc_system;
 extern crate bytes;
-#[macro_use]
 extern crate failure;
 extern crate futures;
 extern crate http;
@@ -15,7 +14,9 @@ extern crate tokio_timer;
 
 use alloc_system::System;
 use bytes::{BufMut, BytesMut};
+use failure::Error;
 use futures::{future, Future, Sink, Stream};
+use http::header::{HeaderValue, CONTENT_LENGTH, CONTENT_TYPE};
 use hyper::client::connect::Connect;
 use hyper::{Body, Client, Request, Response, Uri};
 use std::path::PathBuf;
@@ -45,14 +46,13 @@ struct SensorCodec;
 
 impl Decoder for SensorCodec {
     type Item = SensorReading;
-    type Error = std::io::Error;
+    type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         let newline = src.as_ref().iter().position(|b| *b == b'\n');
         if let Some(n) = newline {
             let line = src.split_to(n + 1);
             let r = str::from_utf8(line.as_ref()).ok().and_then(|s| {
-                use std::str::FromStr;
                 let mut it = s.split_whitespace();
                 let humidity = it.next().and_then(|s| f32::from_str(s).ok());
                 let temperature = it.next().and_then(|s| f32::from_str(s).ok());
@@ -75,7 +75,7 @@ impl Decoder for SensorCodec {
 
 impl Encoder for SensorCodec {
     type Item = SensorCommand;
-    type Error = std::io::Error;
+    type Error = io::Error;
 
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         match item {
@@ -91,18 +91,6 @@ impl Encoder for SensorCodec {
 struct Sensor {
     path: PathBuf,
     serial_settings: SerialPortSettings,
-}
-
-#[derive(Debug, Fail)]
-enum Error {
-    #[fail(display = "an IO error has occurred: {}", _0)]
-    Io(#[cause] io::Error),
-    #[fail(display = "an HTTP error has occurred: {}", _0)]
-    Hyper(#[cause] hyper::Error),
-    #[fail(display = "an timer error has occurred: {}", _0)]
-    Timer(#[cause] tokio_timer::Error),
-    #[fail(display = "an operation has timed out")]
-    Timeout,
 }
 
 impl Service for Sensor {
@@ -124,7 +112,7 @@ impl Service for Sensor {
                     Some(r) => Ok(r),
                     _ => Err(io::Error::new(io::ErrorKind::Other, "Read failed")),
                 })
-                .map_err(Error::Io),
+                .map_err(|e| e.into()),
         )
     }
 }
@@ -153,14 +141,14 @@ impl<C: Connect + 'static> Service for Influx<C> {
         );
         let request = Request::post(&self.url)
             .header(
-                "Content-Length",
-                http::header::HeaderValue::from_str(&msg.len().to_string()).unwrap(),
+                CONTENT_LENGTH,
+                HeaderValue::from_str(&msg.len().to_string()).unwrap(),
             )
-            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(Body::from(msg))
             .unwrap();
 
-        Box::new(self.client.request(request).map_err(Error::Hyper))
+        Box::new(self.client.request(request).map_err(|e| e.into()))
     }
 }
 
@@ -195,19 +183,10 @@ fn main() {
                     }
                 })
             });
-            let reading = Deadline::new(reading, Instant::now() + Duration::from_secs(6))
-                .map_err(|e| {
-                    if e.is_timer() {
-                        Error::Timer(e.into_timer().unwrap())
-                    } else if e.is_inner() {
-                        e.into_inner().unwrap()
-                    } else if e.is_elapsed() {
-                        Error::Timeout
-                    } else {
-                        unreachable!()
-                    }
-                })
-                .map_err(|e| eprintln!("{}", e));
+            let reading =
+                Deadline::new(reading, Instant::now() + Duration::from_secs(6)).map_err(|e| {
+                    eprintln!("{}", e);
+                });
 
             tokio::spawn(reading);
             Ok(())
