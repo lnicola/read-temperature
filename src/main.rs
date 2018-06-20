@@ -1,31 +1,27 @@
-#![feature(alloc_system, global_allocator, allocator_api)]
-
-extern crate alloc_system;
 extern crate bytes;
 extern crate failure;
 extern crate futures;
 extern crate http;
 extern crate hyper;
 extern crate tokio;
-extern crate tokio_io;
+extern crate tokio_codec;
 extern crate tokio_serial;
 extern crate tokio_service;
 extern crate tokio_timer;
 
-use alloc_system::System;
 use bytes::{BufMut, BytesMut};
 use failure::Error;
 use futures::{future, Future, Sink, Stream};
 use http::header::CONTENT_TYPE;
 use hyper::client::connect::Connect;
 use hyper::{Body, Client, Request, Response, Uri};
+use std::alloc::System;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{env, io, str};
-use tokio_io::codec::{Decoder, Encoder};
-use tokio_io::AsyncRead;
+use tokio_codec::{Decoder, Encoder};
 use tokio_serial::{Serial, SerialPortSettings};
 use tokio_service::Service;
 use tokio_timer::{Deadline, Interval};
@@ -105,7 +101,7 @@ impl Service for Sensor {
 
         Box::new(
             future::result(serial)
-                .map(|port| port.framed(SensorCodec))
+                .map(|port| SensorCodec.framed(port))
                 .and_then(|transport| transport.send(req))
                 .and_then(|transport| transport.into_future().map_err(|(e, _)| e))
                 .and_then(|(reading, _)| match reading {
