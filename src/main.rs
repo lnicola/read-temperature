@@ -89,11 +89,11 @@ struct Sensor {
 }
 
 impl Sensor {
-    fn call(&self, req: SensorCommand) -> impl Future<Item = SensorReading, Error = Error> + Send {
-        let serial = Serial::from_path(&self.path, &self.serial_settings);
+    fn call(&self, req: SensorCommand) -> impl Future<Item = SensorReading, Error = Error> {
+        let serial = Serial::from_path(&self.path, &self.serial_settings)
+            .map(|port| SensorCodec.framed(port));
 
         future::result(serial)
-            .map(|port| SensorCodec.framed(port))
             .and_then(|transport| transport.send(req))
             .and_then(|transport| transport.into_future().map_err(|(e, _)| e))
             .and_then(|(reading, _)| match reading {
@@ -114,7 +114,7 @@ struct Influx<C: Connect> {
 }
 
 impl<C: Connect + 'static> Influx<C> {
-    fn call(&self, req: InfluxData) -> impl Future<Item = Response<Body>, Error = Error> + Send {
+    fn call(&self, req: InfluxData) -> impl Future<Item = Response<Body>, Error = Error> {
         let msg = format!(
             "temperature,host=ubik value={}\nhumidity,host=ubik value={}\n",
             req.temperature, req.humidity
