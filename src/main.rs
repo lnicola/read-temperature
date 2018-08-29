@@ -14,8 +14,6 @@ use http::header::CONTENT_TYPE;
 use hyper::client::connect::Connect;
 use hyper::{Body, Client, Request, Response, Uri};
 use std::alloc::System;
-use std::error;
-use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -25,38 +23,12 @@ use tokio_codec::{Decoder, Encoder};
 use tokio_serial::{Serial, SerialPortSettings};
 use tokio_service::Service;
 use tokio_timer::{Interval, Timeout};
+use error::Error;
+
+mod error;
 
 #[global_allocator]
 static A: System = System;
-
-#[derive(Debug)]
-enum Error {
-    Io(io::Error),
-    Hyper(hyper::Error),
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            Error::Io(e) => write!(f, "Input/Output error: {}.", e),
-            Error::Hyper(e) => write!(f, "HTTP error: {}.", e),
-        }
-    }
-}
-
-impl error::Error for Error {}
-
-impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Self {
-        Error::Io(err)
-    }
-}
-
-impl From<hyper::Error> for Error {
-    fn from(err: hyper::Error) -> Self {
-        Error::Hyper(err)
-    }
-}
 
 enum SensorCommand {
     Measure,
