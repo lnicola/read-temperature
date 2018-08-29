@@ -1,5 +1,4 @@
 extern crate bytes;
-extern crate failure;
 extern crate futures;
 extern crate http;
 extern crate hyper;
@@ -10,12 +9,13 @@ extern crate tokio_service;
 extern crate tokio_timer;
 
 use bytes::{BufMut, BytesMut};
-use failure::Error;
 use futures::{future, Future, Sink, Stream};
 use http::header::CONTENT_TYPE;
 use hyper::client::connect::Connect;
 use hyper::{Body, Client, Request, Response, Uri};
 use std::alloc::System;
+use std::error;
+use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -28,6 +28,35 @@ use tokio_timer::{Deadline, Interval};
 
 #[global_allocator]
 static A: System = System;
+
+#[derive(Debug)]
+enum Error {
+    Io(io::Error),
+    Hyper(hyper::Error),
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            Error::Io(e) => write!(f, "Input/Output error: {}.", e),
+            Error::Hyper(e) => write!(f, "HTTP error: {}.", e),
+        }
+    }
+}
+
+impl error::Error for Error { }
+
+impl From<io::Error> for Error {
+    fn from(err: io::Error) -> Self {
+        Error::Io(err)
+    }
+}
+
+impl From<hyper::Error> for Error {
+    fn from(err: hyper::Error) -> Self {
+        Error::Hyper(err)
+    }
+}
 
 enum SensorCommand {
     Measure,
