@@ -19,9 +19,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{env, io, str};
-use tokio_codec::{Decoder, Encoder};
+use tokio::codec::{Decoder, Encoder};
+use tokio::timer::{Interval, Timeout};
 use tokio_serial::{Serial, SerialPortSettings};
-use tokio_timer::{Interval, Timeout};
 
 mod error;
 
@@ -39,6 +39,19 @@ struct SensorReading {
 
 struct SensorCodec;
 
+fn parse_response(s: &str) -> Option<SensorReading> {
+    let mut it = s.split_whitespace();
+    let humidity = it.next().and_then(|s| f32::from_str(s).ok());
+    let temperature = it.next().and_then(|s| f32::from_str(s).ok());
+    match (humidity, temperature) {
+        (Some(humidity), Some(temperature)) => Some(SensorReading {
+            temperature,
+            humidity,
+        }),
+        (_, _) => None,
+    }
+}
+
 impl Decoder for SensorCodec {
     type Item = SensorReading;
     type Error = io::Error;
@@ -47,18 +60,7 @@ impl Decoder for SensorCodec {
         let newline = src.as_ref().iter().position(|b| *b == b'\n');
         if let Some(n) = newline {
             let line = src.split_to(n + 1);
-            let r = str::from_utf8(line.as_ref()).ok().and_then(|s| {
-                let mut it = s.split_whitespace();
-                let humidity = it.next().and_then(|s| f32::from_str(s).ok());
-                let temperature = it.next().and_then(|s| f32::from_str(s).ok());
-                match (humidity, temperature) {
-                    (Some(humidity), Some(temperature)) => Some(SensorReading {
-                        temperature,
-                        humidity,
-                    }),
-                    (_, _) => None,
-                }
-            });
+            let r = str::from_utf8(line.as_ref()).ok().and_then(parse_response);
             return match r {
                 Some(r) => Ok(Some(r)),
                 _ => Err(io::Error::new(io::ErrorKind::Other, "Invalid string")),
