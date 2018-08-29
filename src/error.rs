@@ -1,7 +1,7 @@
 use hyper;
-use std::io;
 use std::error;
 use std::fmt::{self, Display, Formatter};
+use std::io;
 
 #[derive(Debug)]
 pub enum Error {

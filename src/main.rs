@@ -9,6 +9,7 @@ extern crate tokio_service;
 extern crate tokio_timer;
 
 use bytes::{BufMut, BytesMut};
+use error::Error;
 use futures::{future, Future, Sink, Stream};
 use http::header::CONTENT_TYPE;
 use hyper::client::connect::Connect;
@@ -23,7 +24,6 @@ use tokio_codec::{Decoder, Encoder};
 use tokio_serial::{Serial, SerialPortSettings};
 use tokio_service::Service;
 use tokio_timer::{Interval, Timeout};
-use error::Error;
 
 mod error;
 
@@ -154,14 +154,12 @@ fn main() {
         path: PathBuf::from(&tty_path),
         serial_settings: SerialPortSettings::default(),
     };
-
     let influx = Arc::new(Influx {
         url: influx_url,
         client: Client::new(),
     });
 
-    let wakeups = Interval::new(Instant::now(), Duration::from_secs(10));
-    let reads = wakeups
+    let reads = Interval::new(Instant::now(), Duration::from_secs(10))
         .for_each(move |_| {
             let influx = Arc::clone(&influx);
             let reading = sensor.call(SensorCommand::Measure).and_then(move |r| {
