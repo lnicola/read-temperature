@@ -5,7 +5,6 @@ extern crate hyper;
 extern crate tokio;
 extern crate tokio_codec;
 extern crate tokio_serial;
-extern crate tokio_service;
 extern crate tokio_timer;
 
 use bytes::{BufMut, BytesMut};
@@ -22,7 +21,6 @@ use std::time::{Duration, Instant};
 use std::{env, io, str};
 use tokio_codec::{Decoder, Encoder};
 use tokio_serial::{Serial, SerialPortSettings};
-use tokio_service::Service;
 use tokio_timer::{Interval, Timeout};
 
 mod error;
@@ -90,26 +88,18 @@ struct Sensor {
     serial_settings: SerialPortSettings,
 }
 
-impl Service for Sensor {
-    type Request = SensorCommand;
-    type Response = SensorReading;
-    type Error = Error;
-
-    type Future = Box<Future<Item = Self::Response, Error = Self::Error> + Send>;
-
-    fn call(&self, req: Self::Request) -> Self::Future {
+impl Sensor {
+    fn call(&self, req: SensorCommand) -> impl Future<Item = SensorReading, Error = Error> + Send {
         let serial = Serial::from_path(&self.path, &self.serial_settings);
 
-        Box::new(
-            future::result(serial)
-                .map(|port| SensorCodec.framed(port))
-                .and_then(|transport| transport.send(req))
-                .and_then(|transport| transport.into_future().map_err(|(e, _)| e))
-                .and_then(|(reading, _)| match reading {
-                    Some(r) => Ok(r),
-                    _ => Err(io::Error::new(io::ErrorKind::Other, "Read failed")),
-                }).map_err(|e| e.into()),
-        )
+        future::result(serial)
+            .map(|port| SensorCodec.framed(port))
+            .and_then(|transport| transport.send(req))
+            .and_then(|transport| transport.into_future().map_err(|(e, _)| e))
+            .and_then(|(reading, _)| match reading {
+                Some(r) => Ok(r),
+                _ => Err(io::Error::new(io::ErrorKind::Other, "Read failed")),
+            }).map_err(|e| e.into())
     }
 }
 
@@ -123,14 +113,8 @@ struct Influx<C: Connect> {
     client: Client<C>,
 }
 
-impl<C: Connect + 'static> Service for Influx<C> {
-    type Request = InfluxData;
-    type Response = Response<Body>;
-    type Error = Error;
-
-    type Future = Box<Future<Item = Self::Response, Error = Self::Error> + Send>;
-
-    fn call(&self, req: Self::Request) -> Self::Future {
+impl<C: Connect + 'static> Influx<C> {
+    fn call(&self, req: InfluxData) -> impl Future<Item = Response<Body>, Error = Error> + Send {
         let msg = format!(
             "temperature,host=ubik value={}\nhumidity,host=ubik value={}\n",
             req.temperature, req.humidity
@@ -140,7 +124,7 @@ impl<C: Connect + 'static> Service for Influx<C> {
             .body(Body::from(msg))
             .unwrap();
 
-        Box::new(self.client.request(request).map_err(|e| e.into()))
+        self.client.request(request).map_err(|e| e.into())
     }
 }
 
