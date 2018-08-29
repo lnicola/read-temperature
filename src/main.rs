@@ -44,7 +44,7 @@ impl Display for Error {
     }
 }
 
-impl error::Error for Error { }
+impl error::Error for Error {}
 
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Self {
@@ -136,8 +136,7 @@ impl Service for Sensor {
                 .and_then(|(reading, _)| match reading {
                     Some(r) => Ok(r),
                     _ => Err(io::Error::new(io::ErrorKind::Other, "Read failed")),
-                })
-                .map_err(|e| e.into()),
+                }).map_err(|e| e.into()),
         )
     }
 }
@@ -204,15 +203,13 @@ fn main() {
                     }
                 })
             });
-            let reading =
-                Timeout::new(reading, Duration::from_secs(6)).map_err(|e| {
-                    eprintln!("{}", e);
-                });
+            let reading = Timeout::new(reading, Duration::from_secs(6)).map_err(|e| {
+                eprintln!("{}", e);
+            });
 
             tokio::spawn(reading);
             Ok(())
-        })
-        .map_err(|e| eprintln!("{}", e));
+        }).map_err(|e| eprintln!("{}", e));
 
     tokio::run(reads);
 }
