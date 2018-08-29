@@ -24,7 +24,7 @@ use std::{env, io, str};
 use tokio_codec::{Decoder, Encoder};
 use tokio_serial::{Serial, SerialPortSettings};
 use tokio_service::Service;
-use tokio_timer::{Deadline, Interval};
+use tokio_timer::{Interval, Timeout};
 
 #[global_allocator]
 static A: System = System;
@@ -205,7 +205,7 @@ fn main() {
                 })
             });
             let reading =
-                Deadline::new(reading, Instant::now() + Duration::from_secs(6)).map_err(|e| {
+                Timeout::new(reading, Duration::from_secs(6)).map_err(|e| {
                     eprintln!("{}", e);
                 });
 
