@@ -12,6 +12,7 @@ use error::Error;
 use futures::{future, Future, Sink, Stream};
 use http::header::CONTENT_TYPE;
 use hyper::client::connect::Connect;
+use hyper::client::{Builder, HttpConnector};
 use hyper::{Body, Client, Request, Response, Uri};
 use std::alloc::System;
 use std::path::PathBuf;
@@ -20,6 +21,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{env, io, str};
 use tokio::codec::{Decoder, Encoder};
+use tokio::runtime::current_thread;
 use tokio::timer::{Interval, Timeout};
 use tokio_serial::{Serial, SerialPortSettings};
 
@@ -133,17 +135,15 @@ impl<C: Connect + 'static> Influx<C> {
 fn main() {
     let mut args = env::args();
     let tty_path = args.nth(1).unwrap_or_else(|| String::from("/dev/ttyACM0"));
-    let influx_url =
-        Uri::from_str("http://127.0.0.1:8086/write?db=temperature&precision=s").unwrap();
+    let url = Uri::from_str("http://127.0.0.1:8086/write?db=temperature&precision=s").unwrap();
 
     let sensor = Sensor {
         path: PathBuf::from(&tty_path),
         serial_settings: SerialPortSettings::default(),
     };
-    let influx = Arc::new(Influx {
-        url: influx_url,
-        client: Client::new(),
-    });
+    let connector = HttpConnector::new(1);
+    let client = Builder::default().build(connector);
+    let influx = Arc::new(Influx { url, client });
 
     let reads = Interval::new(Instant::now(), Duration::from_secs(10))
         .for_each(move |_| {
@@ -167,5 +167,5 @@ fn main() {
             Ok(())
         }).map_err(|e| eprintln!("{}", e));
 
-    tokio::run(reads);
+    current_thread::block_on_all(reads).unwrap();
 }
