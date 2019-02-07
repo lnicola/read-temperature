@@ -141,7 +141,7 @@ fn main() {
         path: PathBuf::from(&tty_path),
         serial_settings: SerialPortSettings::default(),
     };
-    let connector = HttpConnector::new(1);
+    let connector = HttpConnector::new_with_tokio_threadpool_resolver();
     let client = Builder::default().build(connector);
     let influx = Arc::new(Influx { url, client });
 
