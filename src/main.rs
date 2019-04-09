@@ -14,7 +14,6 @@ use http::header::CONTENT_TYPE;
 use hyper::client::connect::Connect;
 use hyper::client::{Builder, HttpConnector};
 use hyper::{Body, Client, Request, Response, Uri};
-use std::alloc::System;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -26,9 +25,6 @@ use tokio::timer::{Interval, Timeout};
 use tokio_serial::{Serial, SerialPortSettings};
 
 mod error;
-
-#[global_allocator]
-static A: System = System;
 
 enum SensorCommand {
     Measure,
