@@ -99,13 +99,9 @@ impl Sensor {
             .and_then(|(reading, _)| match reading {
                 Some(r) => Ok(r),
                 _ => Err(io::Error::new(io::ErrorKind::Other, "Read failed")),
-            }).map_err(|e| e.into())
+            })
+            .map_err(|e| e.into())
     }
-}
-
-struct InfluxData {
-    temperature: f32,
-    humidity: f32,
 }
 
 struct Influx<C: Connect> {
@@ -114,14 +110,10 @@ struct Influx<C: Connect> {
 }
 
 impl<C: Connect + 'static> Influx<C> {
-    fn call(&self, req: InfluxData) -> impl Future<Item = Response<Body>, Error = Error> {
-        let msg = format!(
-            "temperature,host=ubik value={}\nhumidity,host=ubik value={}\n",
-            req.temperature, req.humidity
-        );
+    fn call(&self, message: String) -> impl Future<Item = Response<Body>, Error = Error> {
         let request = Request::post(&self.url)
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(Body::from(msg))
+            .body(Body::from(message))
             .unwrap();
 
         self.client.request(request).map_err(|e| e.into())
@@ -145,11 +137,11 @@ fn main() {
         .for_each(move |_| {
             let influx = Arc::clone(&influx);
             let reading = sensor.call(SensorCommand::Measure).and_then(move |r| {
-                let data = InfluxData {
-                    temperature: r.temperature,
-                    humidity: r.humidity,
-                };
-                influx.call(data).map(|r| {
+                let msg = format!(
+                    "temperature,host=ubik value={}\nhumidity,host=ubik value={}\n",
+                    r.temperature, r.humidity
+                );
+                influx.call(msg).map(|r| {
                     if !r.status().is_success() {
                         eprintln!("{:?}", r);
                     }
@@ -161,7 +153,8 @@ fn main() {
 
             tokio::spawn(reading);
             Ok(())
-        }).map_err(|e| eprintln!("{}", e));
+        })
+        .map_err(|e| eprintln!("{}", e));
 
     current_thread::block_on_all(reads).unwrap();
 }
