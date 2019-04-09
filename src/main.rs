@@ -122,11 +122,12 @@ impl<C: Connect + 'static> Influx<C> {
 
 fn main() {
     let mut args = env::args();
-    let tty_path = args.nth(1).unwrap_or_else(|| String::from("/dev/ttyACM0"));
+    let arg = args.nth(1);
+    let tty_path = arg.as_ref().map(String::as_str).unwrap_or("/dev/ttyACM0");
     let url = Uri::from_str("http://127.0.0.1:8086/write?db=temperature&precision=s").unwrap();
 
     let sensor = Sensor {
-        path: PathBuf::from(&tty_path),
+        path: PathBuf::from(tty_path),
         serial_settings: SerialPortSettings::default(),
     };
     let connector = HttpConnector::new_with_tokio_threadpool_resolver();
