@@ -120,13 +120,42 @@ impl<C: Connect + 'static> Influx<C> {
     }
 }
 
+fn co2_thread<C: Connect + 'static>(influx: Arc<Influx<C>>) {
+    let sensor = co2mon::Sensor::open_default().unwrap();
+    let reads = Interval::new(Instant::now(), Duration::from_secs(10))
+        .for_each(move |_| {
+            match sensor.read() {
+                Ok(reading) => {
+                    let msg = format!(
+                        "temperature2,host=ubik value={}\nco2,host=ubik value={}\n",
+                        reading.temperature(),
+                        reading.co2()
+                    );
+                    let f = influx
+                        .call(msg)
+                        .map(|r| {
+                            if !r.status().is_success() {
+                                eprintln!("{:?}", r);
+                            }
+                        })
+                        .map_err(|e| eprintln!("{}", e));
+                    tokio::spawn(f);
+                }
+                Err(e) => eprintln!("{}", e),
+            }
+            Ok(())
+        })
+        .map_err(|e| eprintln!("{}", e));
+    current_thread::block_on_all(reads).unwrap();
+}
+
 fn main() {
     let mut args = env::args();
     let arg = args.nth(1);
     let tty_path = arg.as_ref().map(String::as_str).unwrap_or("/dev/ttyACM0");
     let url = Uri::from_str("http://127.0.0.1:8086/write?db=temperature&precision=s").unwrap();
 
-    let sensor = Sensor {
+    let temperature_sensor = Sensor {
         path: PathBuf::from(tty_path),
         serial_settings: SerialPortSettings::default(),
     };
@@ -134,25 +163,31 @@ fn main() {
     let client = Builder::default().build(connector);
     let influx = Arc::new(Influx { url, client });
 
+    let influx_ = influx.clone();
+    std::thread::spawn(move || co2_thread(influx_));
+
     let reads = Interval::new(Instant::now(), Duration::from_secs(10))
         .for_each(move |_| {
             let influx = Arc::clone(&influx);
-            let reading = sensor.call(SensorCommand::Measure).and_then(move |r| {
-                let msg = format!(
-                    "temperature,host=ubik value={}\nhumidity,host=ubik value={}\n",
-                    r.temperature, r.humidity
-                );
-                influx.call(msg).map(|r| {
-                    if !r.status().is_success() {
-                        eprintln!("{:?}", r);
-                    }
-                })
-            });
+            let reading = temperature_sensor
+                .call(SensorCommand::Measure)
+                .and_then(move |r| {
+                    let msg = format!(
+                        "temperature,host=ubik value={}\nhumidity,host=ubik value={}\n",
+                        r.temperature, r.humidity
+                    );
+                    influx.call(msg).map(|r| {
+                        if !r.status().is_success() {
+                            eprintln!("{:?}", r);
+                        }
+                    })
+                });
             let reading = Timeout::new(reading, Duration::from_secs(6)).map_err(|e| {
                 eprintln!("{}", e);
             });
 
             tokio::spawn(reading);
+
             Ok(())
         })
         .map_err(|e| eprintln!("{}", e));
