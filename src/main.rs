@@ -121,7 +121,13 @@ impl<C: Connect + 'static> Influx<C> {
 }
 
 fn co2_thread<C: Connect + 'static>(influx: Arc<Influx<C>>) {
-    let sensor = co2mon::Sensor::open_default().unwrap();
+    let sensor = match co2mon::Sensor::open_default() {
+        Ok(sensor) => sensor,
+        Err(e) => {
+            eprintln!("{}", e);
+            return;
+        }
+    };
     let reads = Interval::new(Instant::now(), Duration::from_secs(10))
         .for_each(move |_| {
             match sensor.read() {
