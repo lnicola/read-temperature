@@ -2,14 +2,14 @@
 authors = ["Laurentiu Nicola <lnicola@dend.ro>"]
 name = "read-temperature"
 version = "0.1.0"
+edition = "2018"
 
 [dependencies]
-bytes = "0.4"
-co2mon = "1.0"
-futures = "0.1"
-http = "0.1"
-hyper = "0.12"
-tokio-codec = "0.1"
-tokio-serial = "3.2"
-tokio-timer = "0.2"
-tokio = "0.1"
+bytes = "0.5"
+co2mon = "2.0"
+futures = "0.3"
+http = "0.2"
+hyper = "0.13"
+tokio-serial = "4.3"
+tokio-util = "0.2"
+tokio = { version = "0.2", features = ["rt-core", "time"] }

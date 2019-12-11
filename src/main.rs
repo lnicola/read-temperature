@@ -1,28 +1,22 @@
-extern crate bytes;
-extern crate futures;
-extern crate http;
-extern crate hyper;
-extern crate tokio;
-extern crate tokio_codec;
-extern crate tokio_serial;
-extern crate tokio_timer;
-
 use bytes::{BufMut, BytesMut};
 use error::Error;
-use futures::{future, Future, Sink, Stream};
-use http::header::CONTENT_TYPE;
-use hyper::client::connect::Connect;
-use hyper::client::{Builder, HttpConnector};
+use futures::future::TryFutureExt;
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
+use hyper;
+use hyper::client::HttpConnector;
+use hyper::header::CONTENT_TYPE;
 use hyper::{Body, Client, Request, Response, Uri};
+use std::io;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use std::{env, io, str};
-use tokio::codec::{Decoder, Encoder};
-use tokio::runtime::current_thread;
-use tokio::timer::{Interval, Timeout};
+use std::time::Duration;
+use std::{env, str};
+use tokio::runtime::Builder;
+use tokio::time::{self, Instant};
 use tokio_serial::{Serial, SerialPortSettings};
+use tokio_util::codec::{Decoder, Encoder};
 
 mod error;
 
@@ -49,7 +43,6 @@ fn parse_response(s: &str) -> Option<SensorReading> {
         (_, _) => None,
     }
 }
-
 impl Decoder for SensorCodec {
     type Item = SensorReading;
     type Error = io::Error;
@@ -74,129 +67,131 @@ impl Encoder for SensorCodec {
 
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         match item {
-            SensorCommand::Measure => {
-                dst.reserve(1);
-                dst.put(b'M')
-            }
+            SensorCommand::Measure => dst.put_u8(b'M'),
         }
         Ok(())
     }
 }
 
+#[derive(Clone)]
 struct Sensor {
     path: PathBuf,
     serial_settings: SerialPortSettings,
 }
 
 impl Sensor {
-    fn call(&self, req: SensorCommand) -> impl Future<Item = SensorReading, Error = Error> {
-        let serial = Serial::from_path(&self.path, &self.serial_settings)
-            .map(|port| SensorCodec.framed(port));
-
-        future::result(serial)
-            .and_then(|transport| transport.send(req))
-            .and_then(|transport| transport.into_future().map_err(|(e, _)| e))
-            .and_then(|(reading, _)| match reading {
-                Some(r) => Ok(r),
-                _ => Err(io::Error::new(io::ErrorKind::Other, "Read failed")),
-            })
-            .map_err(|e| e.into())
+    async fn call(&self, req: SensorCommand) -> Result<SensorReading, Error> {
+        let mut serial = Serial::from_path(&self.path, &self.serial_settings)
+            .map(|port| SensorCodec.framed(port))?;
+        serial.send(req).await?;
+        if let (Some(reading), _) = serial.into_future().await {
+            let reading = reading?;
+            Ok(reading)
+        } else {
+            Err(io::Error::new(io::ErrorKind::Other, "Read failed").into())
+        }
     }
 }
 
-struct Influx<C: Connect> {
+struct Influx {
     url: Uri,
-    client: Client<C>,
+    client: Client<HttpConnector>,
 }
 
-impl<C: Connect + 'static> Influx<C> {
-    fn call(&self, message: String) -> impl Future<Item = Response<Body>, Error = Error> {
+impl Influx {
+    async fn call(&self, message: String) -> Result<Response<Body>, Error> {
         let request = Request::post(&self.url)
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(Body::from(message))
             .unwrap();
-
-        self.client.request(request).map_err(|e| e.into())
+        let response = self.client.request(request).await?;
+        Ok(response)
     }
 }
 
-fn co2_thread<C: Connect + 'static>(influx: Arc<Influx<C>>) {
-    let sensor = match co2mon::Sensor::open_default() {
-        Ok(sensor) => sensor,
-        Err(e) => {
-            eprintln!("{}", e);
-            return;
-        }
-    };
-    let reads = Interval::new(Instant::now(), Duration::from_secs(10))
-        .for_each(move |_| {
-            match sensor.read() {
-                Ok(reading) => {
-                    let msg = format!(
-                        "temperature2,host=ubik value={}\nco2,host=ubik value={}\n",
-                        reading.temperature(),
-                        reading.co2()
-                    );
-                    let f = influx
-                        .call(msg)
-                        .map(|r| {
-                            if !r.status().is_success() {
-                                eprintln!("{:?}", r);
-                            }
-                        })
-                        .map_err(|e| eprintln!("{}", e));
-                    tokio::spawn(f);
+async fn co2_thread(
+    influx: Arc<Influx>,
+    sensor: co2mon::Sensor,
+) -> Result<(), Box<dyn std::error::Error + Send>> {
+    let mut interval = time::interval_at(Instant::now(), Duration::from_secs(10));
+    loop {
+        interval.tick().await;
+        match sensor.read() {
+            Ok(reading) => {
+                let msg = format!(
+                    "temperature2,host=ubik value={}\nco2,host=ubik value={}\n",
+                    reading.temperature(),
+                    reading.co2()
+                );
+                let influx = influx.clone();
+                let f = async move {
+                    let r = influx.call(msg).await?;
+                    if !r.status().is_success() {
+                        eprintln!("{:?}", r);
+                    }
+                    Ok::<(), Error>(())
                 }
-                Err(e) => eprintln!("{}", e),
+                .map_err(|e| eprintln!("{}", e));
+                tokio::spawn(f);
             }
-            Ok(())
-        })
-        .map_err(|e| eprintln!("{}", e));
-    current_thread::block_on_all(reads).unwrap();
+            Err(e) => eprintln!("{}", e),
+        }
+    }
 }
 
-fn main() {
-    let mut args = env::args();
-    let arg = args.nth(1);
-    let tty_path = arg.as_ref().map(String::as_str).unwrap_or("/dev/ttyACM0");
+async fn run(tty_path: String) {
     let url = Uri::from_str("http://127.0.0.1:8086/write?db=temperature&precision=s").unwrap();
-
     let temperature_sensor = Sensor {
         path: PathBuf::from(tty_path),
         serial_settings: SerialPortSettings::default(),
     };
-    let connector = HttpConnector::new_with_tokio_threadpool_resolver();
-    let client = Builder::default().build(connector);
-    let influx = Arc::new(Influx { url, client });
+    let client = Client::new();
+    let influx = Influx { url, client };
+    let influx = Arc::new(influx);
 
     let influx_ = influx.clone();
-    std::thread::spawn(move || co2_thread(influx_));
+    match co2mon::Sensor::open_default() {
+        Ok(sensor) => {
+            tokio::spawn(co2_thread(influx_, sensor));
+        }
+        Err(e) => {
+            eprintln!("{}", e);
+        }
+    };
 
-    let reads = Interval::new(Instant::now(), Duration::from_secs(10))
-        .for_each(move |_| {
-            let influx = Arc::clone(&influx);
-            let reading = temperature_sensor
-                .call(SensorCommand::Measure)
-                .and_then(move |r| {
-                    let msg = format!(
-                        "temperature,host=ubik value={}\nhumidity,host=ubik value={}\n",
-                        r.temperature, r.humidity
-                    );
-                    influx.call(msg).map(|r| {
-                        if !r.status().is_success() {
-                            eprintln!("{:?}", r);
-                        }
-                    })
-                });
-            let reading = Timeout::new(reading, Duration::from_secs(6)).map_err(|e| {
-                eprintln!("{}", e);
-            });
+    let mut interval = time::interval_at(Instant::now(), Duration::from_secs(10));
+    loop {
+        interval.tick().await;
+        let temperature_sensor = temperature_sensor.clone();
+        let influx = Arc::clone(&influx);
+        let one = async move {
+            let reading = temperature_sensor.call(SensorCommand::Measure).await?;
+            let msg = format!(
+                "temperature,host=ubik value={}\nhumidity,host=ubik value={}\n",
+                reading.temperature, reading.humidity
+            );
+            let r = influx.call(msg).await?;
+            if !r.status().is_success() {
+                eprintln!("{:?}", r);
+            }
+            Ok::<(), Error>(())
+        };
+        if let Err(e) = time::timeout(Duration::from_secs(6), one).await {
+            eprintln!("{}", e);
+        }
+    }
+}
 
-            tokio::spawn(reading);
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = env::args();
+    let arg = args.nth(1);
+    let tty_path = arg
+        .as_ref()
+        .map(String::as_str)
+        .unwrap_or("/dev/ttyACM0")
+        .to_string();
 
-            Ok(())
-        })
-        .map_err(|e| eprintln!("{}", e));
-
-    current_thread::block_on_all(reads).unwrap();
+    let mut rt = Builder::new().basic_scheduler().enable_all().build()?;
+    rt.block_on(async move { run(tty_path).await });
+    Ok(())
 }
