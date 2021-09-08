@@ -8,14 +8,13 @@ use hyper::client::HttpConnector;
 use hyper::header::CONTENT_TYPE;
 use hyper::{Body, Client, Request, Response, Uri};
 use std::io;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{env, str};
-use tokio::runtime::Builder;
+use tokio::runtime::Runtime;
 use tokio::time::{self, Instant};
-use tokio_serial::{Serial, SerialPortSettings};
+use tokio_serial::SerialPortBuilderExt;
 use tokio_util::codec::{Decoder, Encoder};
 
 mod error;
@@ -61,11 +60,10 @@ impl Decoder for SensorCodec {
     }
 }
 
-impl Encoder for SensorCodec {
-    type Item = SensorCommand;
+impl Encoder<SensorCommand> for SensorCodec {
     type Error = io::Error;
 
-    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: SensorCommand, dst: &mut BytesMut) -> Result<(), Self::Error> {
         match item {
             SensorCommand::Measure => dst.put_u8(b'M'),
         }
@@ -75,13 +73,14 @@ impl Encoder for SensorCodec {
 
 #[derive(Clone)]
 struct Sensor {
-    path: PathBuf,
-    serial_settings: SerialPortSettings,
+    path: String,
+    baud_rate: u32,
 }
 
 impl Sensor {
     async fn call(&self, req: SensorCommand) -> Result<SensorReading, Error> {
-        let mut serial = Serial::from_path(&self.path, &self.serial_settings)
+        let mut serial = tokio_serial::new(&self.path, self.baud_rate)
+            .open_native_async()
             .map(|port| SensorCodec.framed(port))?;
         serial.send(req).await?;
         if let (Some(reading), _) = serial.into_future().await {
@@ -142,8 +141,8 @@ async fn co2_thread(
 async fn run(tty_path: String) {
     let url = Uri::from_str("http://127.0.0.1:8086/write?db=temperature&precision=s").unwrap();
     let temperature_sensor = Sensor {
-        path: PathBuf::from(tty_path),
-        serial_settings: SerialPortSettings::default(),
+        path: tty_path,
+        baud_rate: 9600,
     };
     let client = Client::new();
     let influx = Influx { url, client };
@@ -191,7 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or("/dev/ttyACM0")
         .to_string();
 
-    let mut rt = Builder::new().basic_scheduler().enable_all().build()?;
+    let rt = Runtime::new()?;
     rt.block_on(async move { run(tty_path).await });
     Ok(())
 }
