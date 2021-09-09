@@ -668,14 +668,11 @@ version = "0.1.0"
 dependencies = [
  "bb8",
  "bb8-postgres",
- "bytes",
  "chrono",
  "co2mon",
- "futures-util",
  "tokio",
  "tokio-postgres",
  "tokio-serial",
- "tokio-util",
 ]
 
 [[package]]

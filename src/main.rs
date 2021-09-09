@@ -1,33 +1,24 @@
 use bb8::Pool;
 use bb8_postgres::PostgresConnectionManager;
-use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, SubsecRound, Utc};
 use error::Error;
-use futures_util::sink::SinkExt;
-use futures_util::stream::StreamExt;
 use std::io;
 use std::str::FromStr;
 use std::time::Duration;
 use std::{env, str};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::{self, Instant};
 use tokio_postgres::{Config, NoTls};
 use tokio_serial::SerialPortBuilderExt;
-use tokio_util::codec::{Decoder, Encoder};
 
 mod error;
-
-enum SensorCommand {
-    Measure,
-}
 
 struct SensorReading {
     temperature: f32,
     humidity: f32,
 }
-
-struct SensorCodec;
 
 fn parse_response(s: &str) -> Option<SensorReading> {
     let mut it = s.split_whitespace();
@@ -41,34 +32,6 @@ fn parse_response(s: &str) -> Option<SensorReading> {
         (_, _) => None,
     }
 }
-impl Decoder for SensorCodec {
-    type Item = SensorReading;
-    type Error = io::Error;
-
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let newline = src.as_ref().iter().position(|b| *b == b'\n');
-        if let Some(n) = newline {
-            let line = src.split_to(n + 1);
-            let r = str::from_utf8(line.as_ref()).ok().and_then(parse_response);
-            return match r {
-                Some(r) => Ok(Some(r)),
-                _ => Err(io::Error::new(io::ErrorKind::Other, "Invalid string")),
-            };
-        }
-        Ok(None)
-    }
-}
-
-impl Encoder<SensorCommand> for SensorCodec {
-    type Error = io::Error;
-
-    fn encode(&mut self, item: SensorCommand, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        match item {
-            SensorCommand::Measure => dst.put_u8(b'M'),
-        }
-        Ok(())
-    }
-}
 
 #[derive(Clone)]
 struct Sensor {
@@ -77,13 +40,13 @@ struct Sensor {
 }
 
 impl Sensor {
-    async fn call(&self, req: SensorCommand) -> Result<SensorReading, Error> {
-        let mut serial = tokio_serial::new(&self.path, self.baud_rate)
-            .open_native_async()
-            .map(|port| SensorCodec.framed(port))?;
-        serial.send(req).await?;
-        if let (Some(reading), _) = serial.into_future().await {
-            let reading = reading?;
+    async fn read(&self) -> Result<SensorReading, Error> {
+        let mut serial = tokio_serial::new(&self.path, self.baud_rate).open_native_async()?;
+        serial.write_u8(b'M').await?;
+        let mut reader = BufReader::new(serial);
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        if let Some(reading) = parse_response(&line) {
             Ok(reading)
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "Read failed").into())
@@ -210,7 +173,7 @@ async fn run(tty_path: String) {
         let temperature_sensor = temperature_sensor.clone();
         let tx = tx.clone();
         let one = async move {
-            let reading = temperature_sensor.call(SensorCommand::Measure).await?;
+            let reading = temperature_sensor.read().await?;
             let time = Utc::now().round_subsecs(0);
             let reading = Reading::Thermometer {
                 time,
