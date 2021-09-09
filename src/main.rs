@@ -1,8 +1,8 @@
 use bb8::Pool;
 use bb8_postgres::PostgresConnectionManager;
-use chrono::{DateTime, SubsecRound, Utc};
+use chrono::{DateTime, Local};
 use error::Error;
-use std::io;
+use std::io::{self, ErrorKind};
 use std::str::FromStr;
 use std::time::Duration;
 use std::{env, str};
@@ -49,7 +49,7 @@ impl Sensor {
         if let Some(reading) = parse_response(&line) {
             Ok(reading)
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, "Read failed").into())
+            Err(io::Error::new(ErrorKind::Other, "Read failed").into())
         }
     }
 }
@@ -63,9 +63,8 @@ async fn co2_thread(
         interval.tick().await;
         match sensor.read() {
             Ok(reading) => {
-                let time = Utc::now().round_subsecs(0);
                 let reading = Reading::Co2Meter {
-                    time,
+                    time: Local::now(),
                     temperature: reading.temperature(),
                     co2: reading.co2(),
                 };
@@ -79,18 +78,18 @@ async fn co2_thread(
 #[derive(Debug)]
 enum Reading {
     Thermometer {
-        time: DateTime<Utc>,
+        time: DateTime<Local>,
         temperature: f32,
         humidity: f32,
     },
     Co2Meter {
-        time: DateTime<Utc>,
+        time: DateTime<Local>,
         temperature: f32,
         co2: u16,
     },
 }
 
-async fn send_one(
+async fn save_reading(
     pool: &Pool<PostgresConnectionManager<NoTls>>,
     reading: Reading,
 ) -> Result<(), Error> {
@@ -101,11 +100,9 @@ async fn send_one(
             temperature,
             humidity,
         } => {
-            let temperature = (temperature * 100.0).round() as i16;
-            let humidity = (humidity * 100.0).round() as i16;
             conn.query(
-                "insert into stats (time, temperature, humidity) values ($1, $2, $3);",
-                &[&time.naive_utc(), &temperature, &humidity],
+                "call insert_stats($1, $2, $3);",
+                &[&time, &temperature, &humidity],
             )
             .await?;
         }
@@ -114,11 +111,10 @@ async fn send_one(
             temperature,
             co2,
         } => {
-            let temperature = (temperature * 100.0).round() as i16;
             let co2 = co2 as i16;
             conn.query(
-                "insert into stats2 (time, temperature, co2) values ($1, $2, $3);",
-                &[&time.naive_utc(), &temperature, &co2],
+                "call insert_stats2($1, $2, $3);",
+                &[&time, &temperature, &co2],
             )
             .await?;
         }
@@ -131,26 +127,49 @@ async fn db_thread(
     pool: Pool<PostgresConnectionManager<NoTls>>,
 ) {
     while let Some(reading) = rx.recv().await {
-        if let Err(e) = send_one(&pool, reading).await {
+        if let Err(e) = save_reading(&pool, reading).await {
             eprintln!("{}", e);
         }
     }
 }
 
+struct DbConfig {
+    host: String,
+    user: String,
+    password: String,
+    dbname: String,
+}
+
+impl DbConfig {
+    pub fn from_env() -> Self {
+        Self {
+            host: env::var("DB_HOST").unwrap_or_default(),
+            user: env::var("DB_USER").unwrap_or_default(),
+            password: env::var("DB_PASS").unwrap_or_default(),
+            dbname: env::var("DB_NAME").unwrap_or_default(),
+        }
+    }
+}
+
+impl Into<Config> for DbConfig {
+    fn into(self) -> Config {
+        let mut config = Config::new();
+        config
+            .host(&self.host)
+            .user(&self.user)
+            .password(&self.password)
+            .dbname(&self.dbname);
+        config
+    }
+}
 async fn run(tty_path: String) {
     let temperature_sensor = Sensor {
         path: tty_path,
         baud_rate: 9600,
     };
-    let mut config = Config::new();
 
-    let host = env::var("DB_HOST").unwrap();
-    let user = env::var("DB_USER").unwrap();
-    let pass = env::var("DB_PASS").unwrap();
-    let name = env::var("DB_NAME").unwrap();
-    config.host(&host).user(&user).password(&pass).dbname(&name);
+    let config = DbConfig::from_env().into();
     let (tx, rx) = mpsc::unbounded_channel();
-    let tx_ = tx.clone();
     let manager = PostgresConnectionManager::new(config, NoTls);
     let pool = Pool::builder().max_size(1).build(manager).await.unwrap();
 
@@ -160,7 +179,7 @@ async fn run(tty_path: String) {
 
     match co2mon::Sensor::open_default() {
         Ok(sensor) => {
-            tokio::spawn(co2_thread(sensor, tx_));
+            tokio::spawn(co2_thread(sensor, tx.clone()));
         }
         Err(e) => {
             eprintln!("{}", e);
@@ -174,9 +193,8 @@ async fn run(tty_path: String) {
         let tx = tx.clone();
         let one = async move {
             let reading = temperature_sensor.read().await?;
-            let time = Utc::now().round_subsecs(0);
             let reading = Reading::Thermometer {
-                time,
+                time: Local::now(),
                 temperature: reading.temperature,
                 humidity: reading.humidity,
             };
