@@ -9,7 +9,7 @@ use std::io;
 use std::str::FromStr;
 use std::time::Duration;
 use std::{env, str};
-use tokio::runtime::Runtime;
+use tokio::runtime::Builder;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::{self, Instant};
 use tokio_postgres::{Config, NoTls};
@@ -231,7 +231,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = args.nth(1);
     let tty_path = arg.as_deref().unwrap_or("/dev/ttyACM0").to_string();
 
-    let rt = Runtime::new()?;
+    let rt = Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()?;
     rt.block_on(async move { run(tty_path).await });
     Ok(())
 }
