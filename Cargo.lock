@@ -691,7 +691,7 @@ dependencies = [
  "bytes",
  "chrono",
  "co2mon",
- "futures",
+ "futures-util",
  "tokio",
  "tokio-postgres",
  "tokio-serial",
