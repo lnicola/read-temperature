@@ -22,15 +22,12 @@ struct SensorReading {
 
 fn parse_response(s: &str) -> Option<SensorReading> {
     let mut it = s.split_whitespace();
-    let humidity = it.next().and_then(|s| f32::from_str(s).ok());
-    let temperature = it.next().and_then(|s| f32::from_str(s).ok());
-    match (humidity, temperature) {
-        (Some(humidity), Some(temperature)) => Some(SensorReading {
-            temperature,
-            humidity,
-        }),
-        (_, _) => None,
-    }
+    let humidity = f32::from_str(it.next()?).ok()?;
+    let temperature = f32::from_str(it.next()?).ok()?;
+    Some(SensorReading {
+        temperature,
+        humidity,
+    })
 }
 
 #[derive(Clone)]
@@ -46,6 +43,7 @@ impl Sensor {
         let mut reader = BufReader::new(serial);
         let mut line = String::new();
         reader.read_line(&mut line).await?;
+
         if let Some(reading) = parse_response(&line) {
             Ok(reading)
         } else {
@@ -162,6 +160,7 @@ impl Into<Config> for DbConfig {
         config
     }
 }
+
 async fn run(tty_path: String) {
     let temperature_sensor = Sensor {
         path: tty_path,
