@@ -2,14 +2,11 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::io;
 
-use bb8::RunError;
-
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),
     Serial(tokio_serial::Error),
-    Postgres(tokio_postgres::Error),
-    Timeout,
+    Reqwest(reqwest::Error),
 }
 
 impl Display for Error {
@@ -17,8 +14,7 @@ impl Display for Error {
         match self {
             Error::Io(e) => write!(f, "Input/Output error: {}.", e),
             Error::Serial(e) => write!(f, "Serial port error: {}.", e),
-            Error::Postgres(e) => write!(f, "Database error: {}.", e),
-            Error::Timeout => write!(f, "Timeout."),
+            Error::Reqwest(e) => write!(f, "HTTP error: {}.", e),
         }
     }
 }
@@ -37,17 +33,8 @@ impl From<tokio_serial::Error> for Error {
     }
 }
 
-impl From<tokio_postgres::Error> for Error {
-    fn from(err: tokio_postgres::Error) -> Self {
-        Error::Postgres(err)
-    }
-}
-
-impl From<RunError<tokio_postgres::Error>> for Error {
-    fn from(err: RunError<tokio_postgres::Error>) -> Self {
-        match err {
-            RunError::User(err) => Error::Postgres(err),
-            RunError::TimedOut => Error::Timeout,
-        }
+impl From<reqwest::Error> for Error {
+    fn from(err: reqwest::Error) -> Self {
+        Error::Reqwest(err)
     }
 }

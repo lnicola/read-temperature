@@ -1,7 +1,6 @@
-use bb8::Pool;
-use bb8_postgres::PostgresConnectionManager;
 use chrono::{DateTime, Local};
 use error::Error;
+use reqwest::Client;
 use std::io::{self, ErrorKind};
 use std::str::FromStr;
 use std::time::Duration;
@@ -9,8 +8,7 @@ use std::{env, str};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio::time::{self, Instant};
-use tokio_postgres::{Config, NoTls};
+use tokio::time::Instant;
 use tokio_serial::SerialPortBuilderExt;
 
 mod error;
@@ -56,7 +54,7 @@ async fn co2_thread(
     sensor: co2mon::Sensor,
     tx: UnboundedSender<Reading>,
 ) -> Result<(), Box<dyn std::error::Error + Send>> {
-    let mut interval = time::interval_at(Instant::now(), Duration::from_secs(10));
+    let mut interval = tokio::time::interval_at(Instant::now(), Duration::from_secs(10));
     loop {
         interval.tick().await;
         match sensor.read() {
@@ -88,92 +86,70 @@ enum Reading {
 }
 
 async fn save_reading(
-    pool: &Pool<PostgresConnectionManager<NoTls>>,
+    client: &Client,
+    api_config: &ApiConfig,
     reading: Reading,
 ) -> Result<(), Error> {
-    let conn = pool.get().await?;
     match reading {
         Reading::Thermometer {
             time,
             temperature,
             humidity,
         } => {
-            conn.query(
-                "call insert_stats($1, $2, $3);",
-                &[&time, &temperature, &humidity],
-            )
-            .await?;
+            client
+                .post(format!(
+                    "{}stats?time={}&temperature={}&humidity={}",
+                    api_config.api_url,
+                    time.timestamp(),
+                    temperature,
+                    humidity
+                ))
+                .bearer_auth(&api_config.access_token)
+                .send()
+                .await?
+                .error_for_status()?;
         }
         Reading::Co2Meter {
             time,
             temperature,
             co2,
         } => {
-            let co2 = co2 as i16;
-            conn.query(
-                "call insert_stats2($1, $2, $3);",
-                &[&time, &temperature, &co2],
-            )
-            .await?;
+            client
+                .post(format!(
+                    "{}stats2?time={}&temperature={}&co2={}",
+                    api_config.api_url,
+                    time.timestamp(),
+                    temperature,
+                    co2
+                ))
+                .bearer_auth(&api_config.access_token)
+                .send()
+                .await?
+                .error_for_status()?;
         }
     }
     Ok(())
 }
 
-async fn db_thread(
-    mut rx: UnboundedReceiver<Reading>,
-    pool: Pool<PostgresConnectionManager<NoTls>>,
-) {
+async fn db_thread(api_config: ApiConfig, mut rx: UnboundedReceiver<Reading>) {
+    let client = Client::new();
     while let Some(reading) = rx.recv().await {
-        if let Err(e) = save_reading(&pool, reading).await {
+        if let Err(e) = save_reading(&client, &api_config, reading).await {
             eprintln!("{}", e);
         }
     }
 }
 
-struct DbConfig {
-    host: String,
-    user: String,
-    password: String,
-    dbname: String,
-}
-
-impl DbConfig {
-    pub fn from_env() -> Self {
-        Self {
-            host: env::var("DB_HOST").unwrap_or_default(),
-            user: env::var("DB_USER").unwrap_or_default(),
-            password: env::var("DB_PASS").unwrap_or_default(),
-            dbname: env::var("DB_NAME").unwrap_or_default(),
-        }
-    }
-}
-
-impl Into<Config> for DbConfig {
-    fn into(self) -> Config {
-        let mut config = Config::new();
-        config
-            .host(&self.host)
-            .user(&self.user)
-            .password(&self.password)
-            .dbname(&self.dbname);
-        config
-    }
-}
-
-async fn run(tty_path: String) {
+async fn run(api_config: ApiConfig, tty_path: String) {
     let temperature_sensor = Sensor {
         path: tty_path,
         baud_rate: 9600,
     };
 
-    let config = DbConfig::from_env().into();
     let (tx, rx) = mpsc::unbounded_channel();
-    let manager = PostgresConnectionManager::new(config, NoTls);
-    let pool = Pool::builder().max_size(1).build(manager).await.unwrap();
 
     tokio::spawn(async move {
-        db_thread(rx, pool).await;
+        db_thread(api_config, rx).await;
     });
 
     match co2mon::Sensor::open_default() {
@@ -185,7 +161,7 @@ async fn run(tty_path: String) {
         }
     };
 
-    let mut interval = time::interval_at(Instant::now(), Duration::from_secs(10));
+    let mut interval = tokio::time::interval_at(Instant::now(), Duration::from_secs(10));
     loop {
         interval.tick().await;
         let temperature_sensor = temperature_sensor.clone();
@@ -200,21 +176,33 @@ async fn run(tty_path: String) {
             tx.send(reading).unwrap();
             Ok::<(), Error>(())
         };
-        if let Err(e) = time::timeout(Duration::from_secs(6), one).await {
+        if let Err(e) = tokio::time::timeout(Duration::from_secs(6), one).await {
             eprintln!("{}", e);
         }
     }
+}
+
+struct ApiConfig {
+    api_url: String,
+    access_token: String,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args();
     let arg = args.nth(1);
     let tty_path = arg.as_deref().unwrap_or("/dev/ttyACM0").to_string();
+    let api_url = env::var("API_URL")?;
+    let access_token = env::var("ACCESS_TOKEN")?;
+
+    let api_config = ApiConfig {
+        api_url,
+        access_token,
+    };
 
     let rt = Builder::new_current_thread()
         .enable_io()
         .enable_time()
         .build()?;
-    rt.block_on(async move { run(tty_path).await });
+    rt.block_on(async move { run(api_config, tty_path).await });
     Ok(())
 }
