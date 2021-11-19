@@ -1,10 +1,10 @@
-use chrono::{DateTime, Local};
 use error::Error;
 use reqwest::Client;
 use std::io::{self, ErrorKind};
 use std::str::FromStr;
 use std::time::Duration;
 use std::{env, str};
+use time::OffsetDateTime;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -60,7 +60,7 @@ async fn co2_thread(
         match sensor.read() {
             Ok(reading) => {
                 let reading = Reading::Co2Meter {
-                    time: Local::now(),
+                    time: OffsetDateTime::now_utc(),
                     temperature: reading.temperature(),
                     co2: reading.co2(),
                 };
@@ -74,12 +74,12 @@ async fn co2_thread(
 #[derive(Debug)]
 enum Reading {
     Thermometer {
-        time: DateTime<Local>,
+        time: OffsetDateTime,
         temperature: f32,
         humidity: f32,
     },
     Co2Meter {
-        time: DateTime<Local>,
+        time: OffsetDateTime,
         temperature: f32,
         co2: u16,
     },
@@ -100,7 +100,7 @@ async fn save_reading(
                 .post(format!(
                     "{}stats?time={}&temperature={}&humidity={}",
                     api_config.api_url,
-                    time.timestamp(),
+                    time.unix_timestamp(),
                     temperature,
                     humidity
                 ))
@@ -118,7 +118,7 @@ async fn save_reading(
                 .post(format!(
                     "{}stats2?time={}&temperature={}&co2={}",
                     api_config.api_url,
-                    time.timestamp(),
+                    time.unix_timestamp(),
                     temperature,
                     co2
                 ))
@@ -169,7 +169,7 @@ async fn run(api_config: ApiConfig, tty_path: String) {
         let one = async move {
             let reading = temperature_sensor.read().await?;
             let reading = Reading::Thermometer {
-                time: Local::now(),
+                time: OffsetDateTime::now_utc(),
                 temperature: reading.temperature,
                 humidity: reading.humidity,
             };
