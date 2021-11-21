@@ -1,5 +1,5 @@
 use error::Error;
-use reqwest::Client;
+use reqwest::{header::HeaderValue, Client};
 use std::io::{self, ErrorKind};
 use std::str::FromStr;
 use std::time::Duration;
@@ -96,15 +96,20 @@ async fn save_reading(
             temperature,
             humidity,
         } => {
+            let body = format!(
+                r#"{{ "time": {}, "temperature": {}, "humidity": {} }}"#,
+                time.unix_timestamp(),
+                temperature,
+                humidity
+            );
             client
-                .post(format!(
-                    "{}stats?time={}&temperature={}&humidity={}",
-                    api_config.api_url,
-                    time.unix_timestamp(),
-                    temperature,
-                    humidity
-                ))
+                .post(format!("{}stats", api_config.api_url))
                 .bearer_auth(&api_config.access_token)
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                )
+                .body(body)
                 .send()
                 .await?
                 .error_for_status()?;
@@ -114,15 +119,20 @@ async fn save_reading(
             temperature,
             co2,
         } => {
+            let body = format!(
+                r#"{{ "time": {}, "temperature": {}, "co2": {} }}"#,
+                time.unix_timestamp(),
+                temperature,
+                co2
+            );
             client
-                .post(format!(
-                    "{}stats2?time={}&temperature={}&co2={}",
-                    api_config.api_url,
-                    time.unix_timestamp(),
-                    temperature,
-                    co2
-                ))
+                .post(format!("{}stats2", api_config.api_url))
                 .bearer_auth(&api_config.access_token)
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                )
+                .body(body)
                 .send()
                 .await?
                 .error_for_status()?;
